@@ -122,6 +122,28 @@ def _load_sh_coeffs(path, max_deg):
     return gm, radius, cBar, sBar, deg
 
 
+class _TranslationReference(sysModel.SysModel):
+    """Publish precomputed orbital states before each attitude dynamics step."""
+
+    def __init__(self, times, positions, velocities):
+        super().__init__()
+        self.times = np.asarray(times)
+        self.positions = np.asarray(positions)
+        self.velocities = np.asarray(velocities)
+        self.messages = [messaging.TransRefMsg() for _ in range(self.positions.shape[1])]
+        self.UpdateState(0)
+
+    def UpdateState(self, current_time):
+        index = int(np.searchsorted(self.times, current_time * 1e-9 - 1e-8, side="left"))
+        if index >= len(self.times) or abs(self.times[index] - current_time * 1e-9) > 1e-8:
+            raise ValueError("prescribed translation must cover every attitude dynamics step")
+        for sat, message in enumerate(self.messages):
+            payload = messaging.TransRefMsgPayload()
+            payload.r_RN_N = self.positions[index, sat].tolist()
+            payload.v_RN_N = self.velocities[index, sat].tolist()
+            message.write(payload, current_time, self.moduleID)
+
+
 class _Guidance(sysModel.SysModel):
     """A Basilisk Python module that publishes the reference attitude each control step.
 
@@ -209,11 +231,31 @@ class Mission:
         self._built = False
         self._log_dt = None
         self._elapsed = 0.0
+        self._translation = None
         self.frames_logged = 0
         import Basilisk
         print(f"[mission] run dir: {self.run_dir}  (Basilisk {Basilisk.__version__})")
 
     # ---- setup -------------------------------------------------------------
+    def prescribe_translation(self, times, positions, velocities):
+        """Use supplied ECI states while integrating reaction wheels and attitude.
+
+        Supply one state per satellite at every ``control_dt`` epoch, starting at
+        zero. Orbital forces belong to the propagation that produced these states.
+        """
+        if self._built:
+            raise RuntimeError("prescribe translation before starting the mission")
+        times = np.asarray(times, dtype=float)
+        positions, velocities = np.asarray(positions), np.asarray(velocities)
+        shape = (len(times), len(self._specs), 3)
+        if positions.shape != shape or velocities.shape != shape or len(times) == 0:
+            raise ValueError("translation arrays must have shape (times, satellites, 3)")
+        if not np.allclose(times, np.arange(len(times)) * self._control_dt, rtol=0, atol=1e-8):
+            raise ValueError("translation times must match the attitude dynamics cadence")
+        if not np.all(np.isfinite(positions)) or not np.all(np.isfinite(velocities)):
+            raise ValueError("translation states must be finite")
+        self._translation = _TranslationReference(times, positions, velocities)
+
     def add_satellite(self, elements=None, state=None, name=None, pointing="nadir",
                       cameras=(("overview",),), mass=100.0, drag_area=1.0, drag_cd=2.2,
                       inertia=(10.0, 10.0, 10.0), wheels=True, **_ignored):
@@ -381,16 +423,19 @@ class Mission:
         proc = self._scSim.CreateNewProcess("dyn")
         proc.addTask(self._scSim.CreateNewTask("dynTask", macros.sec2nano(self._control_dt)))
 
-        gf = self._build_gravity()
-        self._build_third_bodies(gf)
-        atmo = self._build_atmosphere() if "drag" in self._forces else None
+        gf = self._build_gravity() if self._translation is None else None
+        if gf is not None:
+            self._build_third_bodies(gf)
+        atmo = self._build_atmosphere() if "drag" in self._forces and gf is not None else None
+        if self._translation is not None:
+            self._scSim.AddModelToTask("dynTask", self._translation, 100)
         # Hold the gravity factory + atmosphere on self: the spacecraft tasks reference their
         # C++ objects, so they must not be garbage collected after _build returns.
         self._gf = gf
         self._atmo = atmo
 
         atts = []
-        for spec in self._specs:
+        for sat_index, spec in enumerate(self._specs):
             sc = spacecraft.Spacecraft()
             sc.ModelTag = spec["name"]
             sc.hub.mHub = spec["mass"]
@@ -401,7 +446,10 @@ class Mission:
             sc.hub.v_CN_NInit = v.tolist()
             if spec["wheels"]:
                 sc.hub.sigma_BNInit = [[x] for x in self._initial_attitude(spec, r, v)]
-            gf.addBodiesTo(sc)
+            if gf is not None:
+                gf.addBodiesTo(sc)
+            else:
+                sc.transRefInMsg.subscribeTo(self._translation.messages[sat_index])
             self._scSim.AddModelToTask("dynTask", sc)
             self._sc.append(sc)
 

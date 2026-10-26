@@ -106,10 +106,28 @@ from barrel_mission import WalkerDeltaConstellation
 
 shell = WalkerDeltaConstellation(n_planes=8, sats_per_plane=12, alt_km=550, inc_deg=53)
 elements = shell.elements()
-ephemeris = shell.propagate(minutes=720, dt_s=1, cache_root="cache/sim")
+ephemeris = shell.propagate(minutes=720, dt_s=1, dynamics_dt_s=10,
+                            workers=4, cache_root="cache/sim")
 links = shell.ring_geometry(ephemeris["pos"])
 ```
 
 `circular(minutes=..., dt_s=...)` provides the inexpensive circular approximation;
 `propagate(...)` uses the same Mission force model and recorded precision as the
 journal experiments. Neither operation downloads external data.
+
+`dynamics_dt_s=10` computes the orbit at ten-second intervals, interpolates ECI
+position and velocity using cubic Hermite polynomials, and feeds those states into
+a separate one-second Basilisk attitude simulation with the existing reaction
+wheels, navigation, guidance, and feedback controller. `dt_s=1` still returns
+one-second samples. The separate passes assume the current constant drag area
+and balanced-wheel model; attitude-dependent forces would require coupled dynamics.
+The default is `dynamics_dt_s=10`; explicitly select `dynamics_dt_s=1` for the
+original coupled propagation.
+
+Cache names distinguish dynamics steps and interpolation modes; worker count does
+not change the cache. Constellation propagation reads native records without
+exporting intermediate CSVs. Normal `Mission.close()` still exports its CSVs.
+Attitude control still runs every second, so a ten-second orbit step does not imply
+a tenfold overall speedup. The constellation ephemeris currently exposes positions;
+applications that use `Environment.add_satellite` without quaternions retain its
+ideal nadir attitude model.

@@ -70,7 +70,8 @@ def _julian_date(epoch):
 
 def cache_path(n_planes, sats_per_plane, alt_km, inc_deg, minutes, dt_s, phasing=1,
                raan_offset_deg=0.0, eccentricity=0.001,
-               argument_of_perigee_deg=0.0, epoch=DEFAULT_ORBIT_EPOCH, cache_root="cache/sim"):
+               argument_of_perigee_deg=0.0, epoch=DEFAULT_ORBIT_EPOCH, cache_root="cache/sim",
+               dynamics_dt_s=10.0):
     raan_tag = "" if abs(float(raan_offset_deg)) < 1e-12 else f"_raan{raan_offset_deg:g}"
     epoch_tag = _epoch_datetime(epoch).strftime("%Y%m%dT%H%M%S")
     tag = (
@@ -78,6 +79,8 @@ def cache_path(n_planes, sats_per_plane, alt_km, inc_deg, minutes, dt_s, phasing
         f"h{alt_km:g}_i{inc_deg:g}{raan_tag}_e{eccentricity:g}_"
         f"aop{argument_of_perigee_deg:g}_epoch{epoch_tag}_m{minutes:g}_dt{dt_s:g}"
     )
+    if dynamics_dt_s != 1.0:
+        tag += f"_dyn{dynamics_dt_s:g}_hermite_rw1"
     return Path(cache_root) / (tag.replace(".", "p") + ".npz")
 
 
@@ -177,15 +180,23 @@ def generate_circular(n_planes=3, sats_per_plane=6, alt_km=550.0, inc_deg=53.0,
 def generate(n_planes=3, sats_per_plane=6, alt_km=550.0, inc_deg=53.0,
              minutes=40.0, dt_s=30.0, phasing=1, force=False, raan_offset_deg=0.0,
              eccentricity=0.001, argument_of_perigee_deg=0.0,
-             epoch=DEFAULT_ORBIT_EPOCH, workers=1, cache_root="cache/sim"):
+             epoch=DEFAULT_ORBIT_EPOCH, workers=1, cache_root="cache/sim", dynamics_dt_s=10.0):
     """Propagate a Walker shell with barrel/Basilisk and return the ECI ephemeris.
 
     Returns dict with: t_s (T,), jd (T,), pos (T, N, 3) ECI metres, n_sat.
+    ``dt_s`` is the output sampling interval. ``dynamics_dt_s`` defaults to ten seconds and
+    uses cubic Hermite interpolation of position/velocity, then integrates
+    reaction-wheel attitude dynamics and control at one second along that orbit.
     """
+    if not all(math.isfinite(value) and value > 0 for value in (minutes, dt_s, dynamics_dt_s)):
+        raise ValueError("minutes, dt_s, and dynamics_dt_s must be finite and positive")
+    if workers < 1:
+        raise ValueError("workers must be at least 1")
+    interpolation = "recorded" if dynamics_dt_s == 1.0 else "cubic Hermite position/velocity"
     epoch_text = _epoch_text(epoch)
     cache = cache_path(
         n_planes, sats_per_plane, alt_km, inc_deg, minutes, dt_s, phasing,
-        raan_offset_deg, eccentricity, argument_of_perigee_deg, epoch_text, cache_root)
+        raan_offset_deg, eccentricity, argument_of_perigee_deg, epoch_text, cache_root, dynamics_dt_s)
     if cache.exists() and not force:
         d = np.load(cache)
         def meta(name, default):
@@ -207,6 +218,7 @@ def generate(n_planes=3, sats_per_plane=6, alt_km=550.0, inc_deg=53.0,
             and str(meta("orbit_epoch", "")) == epoch_text
             and abs(float(meta("minutes", minutes)) - minutes) < 1e-9
             and abs(float(meta("dt_s", dt_s)) - dt_s) < 1e-9
+            and float(meta("dynamics_dt_s", 1.0)) == dynamics_dt_s
         ):
             write_metadata(
                 cache,
@@ -223,6 +235,9 @@ def generate(n_planes=3, sats_per_plane=6, alt_km=550.0, inc_deg=53.0,
                 orbit_epoch=epoch_text,
                 minutes=float(minutes),
                 dt_s=float(dt_s),
+                dynamics_dt_s=float(dynamics_dt_s),
+                attitude_dt_s=1.0,
+                interpolation=interpolation,
                 n_epochs=int(len(d["t_s"])),
                 pos_shape=list(d["pos"].shape),
                 position_frame="ECI",
@@ -244,7 +259,7 @@ def generate(n_planes=3, sats_per_plane=6, alt_km=550.0, inc_deg=53.0,
     )
     groups = np.array_split(np.arange(len(elements)), min(int(workers), len(elements)))
     jobs = [(f"comms_{cache.stem}_part{index}", _epoch_tuple(epoch_text),
-             [elements[item] for item in group], minutes, dt_s, str(Path(cache_root) / "missions"))
+             [elements[item] for item in group], minutes, dt_s, str(Path(cache_root) / "missions"), dynamics_dt_s)
             for index, group in enumerate(groups)]
     if len(jobs) == 1:
         pieces = [_propagate_group(jobs[0])]
@@ -275,6 +290,9 @@ def generate(n_planes=3, sats_per_plane=6, alt_km=550.0, inc_deg=53.0,
         orbit_epoch=np.asarray(epoch_text),
         minutes=minutes,
         dt_s=dt_s,
+        dynamics_dt_s=dynamics_dt_s,
+        attitude_dt_s=1.0,
+        interpolation=np.asarray(interpolation),
     )
     write_metadata(
         cache,
@@ -291,6 +309,9 @@ def generate(n_planes=3, sats_per_plane=6, alt_km=550.0, inc_deg=53.0,
         orbit_epoch=epoch_text,
         minutes=float(minutes),
         dt_s=float(dt_s),
+        dynamics_dt_s=float(dynamics_dt_s),
+        attitude_dt_s=1.0,
+        interpolation=interpolation,
         n_epochs=int(len(times)),
         pos_shape=list(pos.shape),
         position_frame="ECI",
@@ -303,17 +324,61 @@ def generate(n_planes=3, sats_per_plane=6, alt_km=550.0, inc_deg=53.0,
 
 def _propagate_group(arguments):
     """Spacecraft dynamics are independent, so groups can propagate separately."""
+    mission = _constellation_mission(arguments)
+    # Mission.close() exports large CSVs; this path consumes the native records
+    # directly and deliberately does not export unused intermediate trajectories.
+    return recorded_ephemeris(mission)
+
+
+def _constellation_mission(arguments):
     from barrel_mission import Mission
 
-    name, epoch, elements, minutes, dt_s, output_root = arguments
-    mission = Mission(name=name, epoch=epoch, output_root=output_root)
+    name, epoch, elements, minutes, dt_s, output_root, dynamics_dt_s = arguments
+    mission = Mission(name=name, epoch=epoch, output_root=output_root, control_dt=dynamics_dt_s)
     for index, element in enumerate(elements):
         mission.add_satellite(elements=element, name=f"sat{index}",
-                              pointing="nadir", cameras=[("overview",)])
-    mission.run(duration=minutes * 60.0, dt=dt_s)
-    result = recorded_ephemeris(mission)
-    mission.close()
-    return result
+                              pointing="nadir", cameras=[("overview",)], wheels=dynamics_dt_s == 1.0)
+    if dynamics_dt_s == 1.0:
+        mission.run(duration=minutes * 60.0, dt=dt_s)
+        return mission
+    # First solve orbital forces at the coarse cadence. For the current constant
+    # drag area and balanced wheels, translation does not depend on attitude.
+    times = np.arange(int(math.floor(minutes * 60.0 + 1e-9)) + 1, dtype=float)
+    duration = max(1, math.ceil(times[-1] / dynamics_dt_s)) * dynamics_dt_s
+    mission.run(duration=duration, dt=dynamics_dt_s)
+    position, velocity = interpolated_states(mission, times)
+    controlled = Mission(name=name + "_attitude", epoch=epoch, output_root=output_root, control_dt=1.0)
+    for index, element in enumerate(elements):
+        controlled.add_satellite(elements=element, name=f"sat{index}",
+                                 pointing="nadir", cameras=[("overview",)])
+    controlled.prescribe_translation(times, position, velocity)
+    controlled.run(duration=times[-1], dt=dt_s)
+    return controlled
+
+
+def interpolated_states(mission, times):
+    """Sample coarse ECI states using cubic Hermite position/velocity interpolation."""
+    knots = np.asarray(mission._recs[0].times(), dtype=float) * 1e-9
+    if len(knots) < 2 or times[0] < knots[0] or times[-1] > knots[-1]:
+        raise ValueError("Basilisk records must bracket all requested sample times")
+    left = np.clip(np.searchsorted(knots, times, side="right") - 1, 0, len(knots) - 2)
+    span = (knots[left + 1] - knots[left])[:, None]
+    u = ((times - knots[left])[:, None]) / span
+    h00, h10 = 2 * u**3 - 3 * u**2 + 1, u**3 - 2 * u**2 + u
+    h01, h11 = -2 * u**3 + 3 * u**2, u**3 - u**2
+    positions = np.empty((len(times), len(mission._recs), 3))
+    velocities = np.empty_like(positions)
+    for index, record in enumerate(mission._recs):
+        position, velocity = np.asarray(record.r_BN_N), np.asarray(record.v_BN_N)
+        positions[:, index] = (h00 * position[left] + h10 * span * velocity[left]
+                               + h01 * position[left + 1] + h11 * span * velocity[left + 1])
+        velocities[:, index] = ((6 * u**2 - 6 * u) / span * position[left]
+                                + (3 * u**2 - 4 * u + 1) * velocity[left]
+                                + (-6 * u**2 + 6 * u) / span * position[left + 1]
+                                + (3 * u**2 - 2 * u) * velocity[left + 1])
+    if not np.all(np.isfinite(positions)) or not np.all(np.isfinite(velocities)):
+        raise ValueError("nonfinite interpolated Basilisk states")
+    return positions, velocities
 
 
 def recorded_ephemeris(mission):
@@ -354,9 +419,9 @@ class WalkerDeltaConstellation:
         return walker_elements(**asdict(self))
 
     def propagate(self, minutes=40.0, dt_s=30.0, *, epoch=DEFAULT_ORBIT_EPOCH,
-                  cache_root="cache/sim", force=False, workers=1):
+                  cache_root="cache/sim", force=False, workers=1, dynamics_dt_s=10.0):
         return generate(**asdict(self), minutes=minutes, dt_s=dt_s, epoch=epoch,
-                        cache_root=cache_root, force=force, workers=workers)
+                        cache_root=cache_root, force=force, workers=workers, dynamics_dt_s=dynamics_dt_s)
 
     def circular(self, minutes=40.0, dt_s=30.0, *, epoch=DEFAULT_ORBIT_EPOCH):
         parameters = asdict(self)
