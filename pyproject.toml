@@ -12,6 +12,7 @@ dependencies = ["numpy>=1.26,<2", "bsk==2.9.1", "pytest>=8"]
 
 [project.optional-dependencies]
 meshes = ["trimesh==5.1.1", "DracoPy==1.7.0"]
+lidar = ["trimesh==5.1.1", "embreex==4.4.0"]
 
 [tool.setuptools]
 packages = [

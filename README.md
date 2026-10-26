@@ -96,6 +96,11 @@ python -m unittest discover -s tests -p 'test_*.py'
 
 ## Walker-delta constellations
 
+STL reading and seeded surface sampling are available from `barrel_assets.mesh`.
+`barrel_sensors.mesh_lidar` provides `LidarMesh`, angular ray scans, occlusion,
+full-surround scans, and return noise. Install the `lidar` extra for mesh ray tracing.
+These routines preserve the template-matching journal's geometry and sampling.
+
 `WalkerDeltaConstellation` owns a shell definition and produces classical elements,
 circular two-body ephemerides, or Basilisk ephemerides with local caching. Ring-link
 geometry is calculated from propagated positions. These operations are shared by
