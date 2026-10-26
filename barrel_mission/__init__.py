@@ -5,5 +5,6 @@ reaction-wheel attitude control), log CSVs, and render into a run-scoped output 
 """
 
 from .mission import Mission
+from .constellation import WalkerDeltaConstellation
 
-__all__ = ["Mission"]
+__all__ = ["Mission", "WalkerDeltaConstellation"]

@@ -93,3 +93,23 @@ storm_global_estimator does not download geometry or external weather data.
 ```sh
 python -m unittest discover -s tests -p 'test_*.py'
 ```
+
+## Walker-delta constellations
+
+`WalkerDeltaConstellation` owns a shell definition and produces classical elements,
+circular two-body ephemerides, or Basilisk ephemerides with local caching. Ring-link
+geometry is calculated from propagated positions. These operations are shared by
+applications instead of being implemented in the storm project.
+
+```python
+from barrel_mission import WalkerDeltaConstellation
+
+shell = WalkerDeltaConstellation(n_planes=8, sats_per_plane=12, alt_km=550, inc_deg=53)
+elements = shell.elements()
+ephemeris = shell.propagate(minutes=720, dt_s=1, cache_root="cache/sim")
+links = shell.ring_geometry(ephemeris["pos"])
+```
+
+`circular(minutes=..., dt_s=...)` provides the inexpensive circular approximation;
+`propagate(...)` uses the same Mission force model and recorded precision as the
+journal experiments. Neither operation downloads external data.
