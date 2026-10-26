@@ -1,0 +1,27 @@
+{
+  "landsat9": {
+    "source": "landsat9_assembled.glb",
+    "url": "https://assets.science.nasa.gov/content/dam/science/missions/landsat/2026/05/Landsat9Kit_Assembled_final.glb",
+    "sha256": "8849f1c6173f82467a751b0efd6a963c613ad8d32fa561f7810392db761e1a8a"
+  },
+  "hubble": {
+    "source": "hubble_a.glb",
+    "url": "https://raw.githubusercontent.com/nasa/NASA-3D-Resources/11ebb4ee043715aefbba6aeec8a61746fad67fa7/3D%20Models/Hubble%20Space%20Telescope%20%28A%29/Hubble%20Space%20Telescope%20%28A%29.glb",
+    "sha256": "e5ba4de15c7d359ac8fa1ab7e286aff42dec09c0fadae3db99252587f39fa384"
+  },
+  "aqua": {
+    "source": "aqua.glb",
+    "url": "https://raw.githubusercontent.com/nasa/NASA-3D-Resources/11ebb4ee043715aefbba6aeec8a61746fad67fa7/3D%20Models/Aqua%20%28A%29/Aqua%20%28A%29.glb",
+    "sha256": "5b5462b3947ae78e308ba9340d3c14cf13179a23006920b17e9e5ea142f3795a"
+  },
+  "chandra": {
+    "source": "chandra.glb",
+    "url": "https://raw.githubusercontent.com/nasa/NASA-3D-Resources/11ebb4ee043715aefbba6aeec8a61746fad67fa7/3D%20Models/Chandra%20X-ray%20Observatory/Chandra%20X-ray%20Observatory.glb",
+    "sha256": "9383f44fc4c6eba73c40b0c2cfe33c08c90f1fb5230274bfdaa98e0c9f116a34"
+  },
+  "dawn": {
+    "source": "dawn.glb",
+    "url": "https://raw.githubusercontent.com/nasa/NASA-3D-Resources/11ebb4ee043715aefbba6aeec8a61746fad67fa7/3D%20Models/Dawn/Dawn.glb",
+    "sha256": "411249aed791994b6a2014894ad6bd7ca0445dbcf6d5342af9edc5df988f04b7"
+  }
+}

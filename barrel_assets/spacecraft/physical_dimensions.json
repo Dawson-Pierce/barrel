@@ -1,0 +1,55 @@
+{
+  "landsat9_assembled.stl": {
+    "source": "landsat9_assembled.glb",
+    "reference": "solar-array length",
+    "reference_dimension_m": 9.8,
+    "reference_axis": 0,
+    "reference_nodes": [
+      "16",
+      "12",
+      "12_3",
+      "11"
+    ],
+    "raw_reference_span": 0.2840969131619395,
+    "metres_per_source_unit": 34.495270965559044,
+    "exported_span_m": [
+      12.653346174596479,
+      4.090104441698159,
+      2.865209420561264
+    ],
+    "source_sha256": "8849f1c6173f82467a751b0efd6a963c613ad8d32fa561f7810392db761e1a8a",
+    "stl_sha256": "ec7ee1a783dcccc68b0242eb7dc463b31ed7938200da10b44371a8620a476872"
+  },
+  "hubble.stl": {
+    "source": "hubble_a.glb",
+    "reference": "axial length",
+    "reference_dimension_m": 13.2,
+    "reference_axis": 1,
+    "reference_nodes": null,
+    "raw_reference_span": 525.4885888505405,
+    "metres_per_source_unit": 0.0251194798137745,
+    "exported_span_m": [
+      11.511223934511591,
+      13.200000000000001,
+      12.592491513806811
+    ],
+    "source_sha256": "e5ba4de15c7d359ac8fa1ab7e286aff42dec09c0fadae3db99252587f39fa384",
+    "stl_sha256": "1161ba6d4be7e7e1c391aad62eaee37c71e4cd92beda6ea656e966962dc64fc4"
+  },
+  "aqua.stl": {
+    "source": "aqua.glb",
+    "reference": "deployed long span",
+    "reference_dimension_m": 16.7,
+    "reference_axis": 2,
+    "reference_nodes": null,
+    "raw_reference_span": 434.20621150615636,
+    "metres_per_source_unit": 0.03846098825272844,
+    "exported_span_m": [
+      4.771613069651186,
+      8.831118247102896,
+      16.7
+    ],
+    "source_sha256": "5b5462b3947ae78e308ba9340d3c14cf13179a23006920b17e9e5ea142f3795a",
+    "stl_sha256": "80f03882edbf85a8e5524c8f039faf0c4a03ccf1e4332c99695b17c41f58e894"
+  }
+}

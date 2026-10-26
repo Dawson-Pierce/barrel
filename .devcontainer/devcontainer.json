@@ -1,0 +1,17 @@
+{
+    "name": "BARREL",
+    "build": {
+        "dockerfile": "../Dockerfile",
+        "context": ".."
+    },
+    "workspaceFolder": "/work",
+    "customizations": {
+        "vscode": {
+            "extensions": ["ms-python.python"],
+            "settings": {
+                "editor.formatOnSave": false,
+                "terminal.integrated.cwd": "/work"
+            }
+        }
+    }
+}

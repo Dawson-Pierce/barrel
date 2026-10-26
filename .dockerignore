@@ -1,0 +1,13 @@
+.git
+**/__pycache__
+**/*.pyc
+**/*.egg-info
+build
+dist
+output
+cache
+.venv
+.pytest_cache
+Texture_Files
+**/*.stl
+**/*.glb

@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "barrel"
+version = "0.1.0"
+description = "Spacecraft simulation framework: environments, sensors, communications, and Basilisk missions."
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = ["numpy>=1.26,<2", "bsk==2.9.1", "pytest>=8"]
+
+[project.optional-dependencies]
+meshes = ["trimesh==5.1.1", "DracoPy==1.7.0"]
+
+[tool.setuptools]
+packages = [
+    "barrel_assets",
+    "barrel_environment",
+    "barrel_render",
+    "barrel_mission",
+    "barrel_sensors",
+]
+
+[tool.setuptools.package-data]
+barrel_assets = ["nasa_sources.json", "spacecraft/*.json", "spacecraft/*.md"]
+barrel_mission = ["data/gravity/*.txt"]

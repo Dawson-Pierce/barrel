@@ -1,0 +1,23 @@
+# BARREL bundled geopotential coefficients (TRUNCATED).
+# Fully-normalized EGM96 coefficients, degree/order 0..4, SI units.
+# This small set is enough for J2-dominated LEO work and for tests; for higher
+# fidelity download a full model (EGM96/GGM03S, degree/order up to ~70+) from
+# ICGEM (http://icgem.gfz-potsdam.de) and point the loader at it.
+#
+gm = 3.986004415e14
+radius = 6378136.3
+#
+# n m            Cbar                   Sbar
+0 0   1.000000000000e+00    0.000000000000e+00
+2 0  -4.841653717360e-04    0.000000000000e+00
+2 1  -1.869876359550e-10    1.195280120310e-09
+2 2   2.439143523980e-06   -1.400166836540e-06
+3 0   9.572541737920e-07    0.000000000000e+00
+3 1   2.029988821840e-06    2.485131587160e-07
+3 2   9.046277686050e-07   -6.190259442050e-07
+3 3   7.210726570570e-07    1.414356269580e-06
+4 0   5.398738637890e-07    0.000000000000e+00
+4 1  -5.363216169710e-07   -4.734402658530e-07
+4 2   3.506941057850e-07    6.626715725400e-07
+4 3   9.907718038290e-07   -2.009283691770e-07
+4 4  -1.885608027350e-07    3.088531693330e-07
