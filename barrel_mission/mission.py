@@ -460,6 +460,10 @@ class Mission:
                 drag.coreParams.projectedArea = spec["drag_area"]
                 drag.coreParams.dragCoeff = spec["drag_cd"]
                 drag.atmoDensInMsg.subscribeTo(atmo.envOutMsgs[-1])
+                # Spacecraft.Reset evaluates forces before the first scheduled
+                # drag update. Prime Basilisk's otherwise uninitialized density
+                # cache from the message's zero payload before that evaluation.
+                drag.ReadInputs()
                 sc.addDynamicEffector(drag)
                 spec["_drag"] = drag
 
