@@ -1,11 +1,4 @@
-"""Walker constellation geometry via the barrel Basilisk Mission.
-
-Builds a Walker-delta shell by looping ``Mission.add_satellite`` over classical elements,
-propagates it with barrel's full Basilisk dynamics, and returns the logged ECI ephemeris. The
-recorded positions are cached in NumPy format at the precision of barrel's
-``trajectory.csv`` so the heavy Basilisk run happens once. Propagation remains barrel's.
-"""
-
+"""Walker constellation definition, cached ephemerides, and parallel propagation."""
 from __future__ import annotations
 
 import json
@@ -103,7 +96,7 @@ def walker_elements(n_planes, sats_per_plane, alt_km=550.0, inc_deg=53.0, phasin
                     raan_offset_deg=0.0, eccentricity=0.001,
                     argument_of_perigee_deg=0.0):
     """Classical elements (a,e,i,RAAN,argp,nu) in SI/rad for a Walker-delta shell."""
-    from barrel_mission.mission import MU_EARTH, R_EARTH, DEG2RAD   
+    from ._dynamics import MU_EARTH, R_EARTH, DEG2RAD   
     a = R_EARTH + alt_km * 1e3
     total = n_planes * sats_per_plane
     els = []
@@ -325,19 +318,19 @@ def generate(n_planes=3, sats_per_plane=6, alt_km=550.0, inc_deg=53.0,
 def _propagate_group(arguments):
     """Spacecraft dynamics are independent, so groups can propagate separately."""
     mission = _constellation_mission(arguments)
-    # Mission.close() exports large CSVs; this path consumes the native records
+    # _BasiliskDynamics.close() exports large CSVs; this path consumes the native records
     # directly and deliberately does not export unused intermediate trajectories.
     return recorded_ephemeris(mission)
 
 
 def _constellation_mission(arguments):
-    from barrel_mission import Mission
+    from ._dynamics import _BasiliskDynamics
 
     name, epoch, elements, minutes, dt_s, output_root, dynamics_dt_s = arguments
-    mission = Mission(name=name, epoch=epoch, output_root=output_root, control_dt=dynamics_dt_s)
+    mission = _BasiliskDynamics(name=name, epoch=epoch, output_root=output_root, control_dt=dynamics_dt_s)
     for index, element in enumerate(elements):
         mission.add_satellite(elements=element, name=f"sat{index}",
-                              pointing="nadir", cameras=[("overview",)], wheels=dynamics_dt_s == 1.0)
+                              pointing="nadir", wheels=dynamics_dt_s == 1.0)
     if dynamics_dt_s == 1.0:
         mission.run(duration=minutes * 60.0, dt=dt_s)
         return mission
@@ -347,10 +340,10 @@ def _constellation_mission(arguments):
     duration = max(1, math.ceil(times[-1] / dynamics_dt_s)) * dynamics_dt_s
     mission.run(duration=duration, dt=dynamics_dt_s)
     position, velocity = interpolated_states(mission, times)
-    controlled = Mission(name=name + "_attitude", epoch=epoch, output_root=output_root, control_dt=1.0)
+    controlled = _BasiliskDynamics(name=name + "_attitude", epoch=epoch, output_root=output_root, control_dt=1.0)
     for index, element in enumerate(elements):
         controlled.add_satellite(elements=element, name=f"sat{index}",
-                                 pointing="nadir", cameras=[("overview",)])
+                                 pointing="nadir")
     controlled.prescribe_translation(times, position, velocity)
     controlled.run(duration=times[-1], dt=dt_s)
     return controlled
@@ -382,7 +375,7 @@ def interpolated_states(mission, times):
 
 
 def recorded_ephemeris(mission):
-    """Read Basilisk logs at the precision of Mission's trajectory CSV.
+    """Read Basilisk logs at the precision of the trajectory CSV.
 
     Geometry needs position and time only. Avoid exporting and parsing millions
     of orbital-element and attitude rows for a constellation parameter sweep.

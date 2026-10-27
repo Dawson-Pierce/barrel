@@ -1,9 +1,3 @@
-barrelsim/build/
-
-# Compiled pybind11 extension (built by CMake, copied into the package)
-barrelsim/_barrelsim*.so
-barrelsim/_barrelsim*.pyd
-
 # Python
 __pycache__/
 *.pyc
@@ -13,7 +7,6 @@ __pycache__/
 .vscode/
 *.user
 
-Texture_Files/
 *.stl
 *.glb
 build/

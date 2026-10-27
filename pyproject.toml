@@ -17,12 +17,10 @@ lidar = ["trimesh==5.1.1", "embreex==4.4.0"]
 [tool.setuptools]
 packages = [
     "barrel_assets",
-    "barrel_environment",
-    "barrel_render",
-    "barrel_mission",
+    "barrel_simulation",
     "barrel_sensors",
 ]
 
 [tool.setuptools.package-data]
 barrel_assets = ["nasa_sources.json", "spacecraft/*.json", "spacecraft/*.md"]
-barrel_mission = ["data/gravity/*.txt"]
+barrel_simulation = ["data/gravity/*.txt"]

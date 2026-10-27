@@ -1,138 +1,143 @@
 # BARREL
 
-BARREL is the shared spacecraft simulation framework. It owns environments and
-scene timing, satellites and guidance, sampled geometry, sensors and estimator
-interfaces, communication/fusion rings, ground stations, and Basilisk propagation
-and logging. Estimation applications attach their own BREW trackers to it.
+BARREL runs spacecraft simulations: dynamics, sampled trajectories, physical
+sources, sensors, estimator chains, and scheduled communications. Applications
+supply experiment settings, estimator adapters, and result processing. BREW
+remains the numerical estimation library, accessed through brewpy.
 
-The small optional Blender rendering API and numerical astronomy helpers remain.
-Large texture collections and spacecraft binaries are not stored in this repo.
-The default Docker image does not install Blender or download spacecraft models.
-
-## Install
-
-Use Python 3.10 or newer:
-
-```sh
-python -m pip install -e .
-```
-
-This installs NumPy, Basilisk (`bsk==2.9.1`), and pytest, which Basilisk imports
-through its runtime support code. For NASA geometry preparation also install:
-
-```sh
-python -m pip install -e '.[meshes]'
-```
-
-## Simulation
+## One simulation owner
 
 ```python
-from barrel_mission import Mission
-from barrel_environment import Scene
-from barrel_sensors import CmosSensor, LidarSensor
+import numpy as np
+from barrel_simulation import Simulation, WalkerDeltaConstellation
 
-with Mission(name="example", output_root="output") as mission:
-    mission.add_satellite(elements=(6928137.0, 0.001, 0.9, 0.0, 0.0, 0.0))
-    mission.run(duration=60.0, dt=1.0)
-    state = mission.state(0)
+shell = WalkerDeltaConstellation(n_planes=2, sats_per_plane=3)
+with Simulation(name="example", output_root="output", log_dt=1) as simulation:
+    for elements in shell.elements():
+        simulation.add_satellite(elements=elements)
+    simulation.run(np.arange(61), record=lambda sim: print(sim.state(0)["position"]))
 ```
 
-The small gravity coefficient file is packaged with BARREL. Numerical propagation,
-sensing, scene timing, guidance, communications, and fusion implementations are
-unchanged by the asset cleanup.
+`Simulation` owns the clock, spacecraft, sources, payloads, and event schedule.
+`run(times, record=...)` executes absolute sample times in seconds. The optional
+record callback receives the simulation after sensing and scheduled actions.
+`step_to(time)` advances one sample. `command(satellite, ...)` changes guidance or
+applies an impulsive delta-v to a dynamically propagated spacecraft. Satellites
+can be identified by their returned object, name, or list index.
+
+Basilisk implementation details live in `_dynamics.py`. There is no separate
+public Mission, Environment, or Scene. `Satellite` is the one spacecraft object
+for both live propagation and stored ephemerides. Sample histories and current
+state belong to that same object.
+
+## Precomputed constellations
+
+```python
+shell = WalkerDeltaConstellation(n_planes=8, sats_per_plane=12)
+ephemeris = shell.propagate(minutes=720, dt_s=1, dynamics_dt_s=10,
+                            workers=12, cache_root="cache/sim")
+simulation = Simulation(seed=3)
+for index in range(shell.satellite_count):
+    simulation.add_ephemeris(ephemeris["t_s"], ephemeris["jd"],
+                             ephemeris["pos"][:, index],
+                             plane=index // shell.sats_per_plane,
+                             slot=index % shell.sats_per_plane)
+```
+
+Walker propagation retains the ten-second orbital integration, cubic Hermite
+interpolation, and separate one-second reaction-wheel/control pass. Worker count
+does not change cache identity. `dynamics_dt_s=1` selects coupled propagation.
+The separate passes assume constant drag area and balanced wheels.
+
+The constellation result currently exposes positions rather than controlled
+attitudes. `add_ephemeris` uses ideal nadir attitude unless quaternions are supplied.
+Sampled histories interpolate position linearly and use the nearest recorded
+attitude; commands require live Basilisk spacecraft. `circular()` remains an
+inexpensive two-body alternative. `ring_geometry()` evaluates adjacent links.
+
+## Sources, sensors, and estimator chains
+
+Sources implement `emit(time_s)` and return `DetectionEmission` objects.
+`ObservedQuantityEmitter` adapts synthetic optical point processes;
+`SatelliteSurfaceEmitter` supplies spacecraft surfaces. Register either with
+`simulation.add_source(source)`. A source is evaluated once per acquisition epoch
+so all sensors share the same physical realization.
+
+Attach a `SensorChannel` to the spacecraft returned by `add_satellite` or
+`add_ephemeris`. A channel contains one sensor and an ordered set of estimators:
+
+```python
+from barrel_sensors import SensorChannel, EstimatorNode
+
+# lidar, pose_estimator, and intent_estimator are configured by the application.
+channel = SensorChannel(lidar, [
+    EstimatorNode("pose", pose_estimator),
+    EstimatorNode("intent", intent_estimator, source="pose"),
+])
+spacecraft.add_payload(channel)
+```
+
+An estimator implements `predict(time_s, dt_s, host=None)`,
+`correct(value, time_s, host=None)`, and `estimate()`. Root nodes receive a
+`MeasurementBatch`; downstream nodes receive the named upstream estimate.
+Multiple nodes may consume the same upstream result. `channel.outputs` exposes
+the latest estimates. Prediction intervals follow the sensor's acquisition
+cadence, including when other simulation events occur between acquisitions.
+
+Use `CmosSensor`, `LidarSensor`, or `Sensor(sample=callback, frame="...")` to
+connect a study-specific acquisition model. The sampling callback receives
+`(simulation, spacecraft, time_s, rng)`. Template Matching uses this interface
+for BARREL mesh ray tracing and its BREW pose estimator.
+
+## Scheduling and communications
+
+`simulation.schedule(name, times, action)` runs `action(simulation)` at the
+specified absolute times. At a shared time, sensors run first, actions run in
+registration order, and the record callback runs last. Events between sample
+times advance dynamics without acquiring sensors. `simulation.events` contains
+the action return values produced during the current step.
+
+This supports commands, accumulated onboard updates, fusion, and downlinks.
+`SatelliteFusionRing` routes estimates using an injected numerical fusion
+function. `GroundStation` receives ring products and updates an attached estimator.
+The application specifies schedules and fusion policy; BARREL executes them.
+
+## Layout
+
+- `barrel_simulation/simulation.py`: Simulation and Satellite.
+- `barrel_simulation/_dynamics.py`: internal Basilisk force/control implementation.
+- `barrel_simulation/constellation.py`: Walker shells, propagation, and caches.
+- `barrel_simulation/sources.py`: emissions and synthetic source models.
+- `barrel_simulation/network.py`: ring routing and ground estimation.
+- `barrel_simulation/coordinates.py`: numerical coordinate/astronomy utilities.
+- `barrel_sensors/`: sensors, measurement batches, estimator nodes, mesh lidar.
+- `barrel_assets/`: NASA downloads, STL conversion, and surface sampling.
+- `tests/`: shared framework regression tests.
+
+Blender rendering, stereo reconstruction, duplicate environment/runtime wrappers,
+legacy guidance wrappers, and rendering examples were removed. Numerical coordinate
+helpers and all sensor geometry used by the journals remain. Old source was backed
+up outside the dissertation workspace before removal.
+
+## Install and Docker
+
+```sh
+python -m pip install -e '.[meshes,lidar]'
+python -m unittest discover -s tests -p 'test_*.py'
+docker build -t barrel .
+docker run --rm barrel
+```
+
+Python 3.10+ is required. Basilisk is pinned to 2.9.1. The two application images
+build their own brewpy/BREW extension and include latexmk for their journals.
 
 ## NASA geometry
 
 ```sh
-python -m barrel_assets.nasa --download
+python -m barrel_assets.nasa --download --assets cache/nasa --output output/meshes
 ```
 
-This downloads only the five selected sources to `cache/nasa/` and writes scaled
-STLs plus conversion metadata to `output/meshes/`. Both directories are ignored.
-`--models landsat9 hubble` selects a subset; `--assets` and `--output` change the
-cache and output locations. Omit `--download` to convert an existing verified cache.
-
-Four models come from a fixed revision of NASA-3D-Resources; the assembled
-Landsat 9 source comes from NASA's mission site. Source SHA256 checksums are
-recorded in `barrel_assets/nasa_sources.json` and verified before conversion.
-The conversion preserves the original scene transforms and physical scaling.
-See `barrel_assets/spacecraft/SOURCES.md` for model and dimensional references.
-No entire NASA repository is cloned.
-
-`asset_path()` resolves generated models under `output/meshes/`, or the directory
-specified by `BARREL_ASSET_DIR`. Explicit mesh paths are also accepted. Legacy
-CubeSat/CYGNSS aliases require user-supplied files. Textures and Blender can be
-provided separately when optional rendering is wanted; sensor simulation does
-not require them.
-
-## Docker
-
-The default image includes the numerical framework and optional mesh-conversion
-libraries, with no bundled meshes or textures:
-
-```sh
-docker build -t barrel .
-docker run --rm barrel
-docker run --rm -v "${PWD}/output:/work/output" barrel python -m barrel_assets.nasa --download
-```
-
-The two application Dockerfiles supply their own pinned scientific packages.
-Template_Matching_RFS prepares its required meshes during its image build;
-storm_global_estimator does not download geometry or external weather data.
-
-## Layout
-
-- `barrel_environment/`: environments, satellites, event-driven scenes, emitters,
-  guidance interfaces, communication rings, and ground stations.
-- `barrel_mission/`: Basilisk orbital/attitude propagation, controls, and CSV logs.
-- `barrel_sensors/`: sensor/estimator interfaces, CMOS, lidar, and stereo geometry.
-- `barrel_assets/`: asset lookup, verified NASA downloads, STL conversion, metadata.
-- `barrel_render/`: shared numerical helpers and optional Blender scene code.
-- `tests/`: runtime and NASA source-integrity tests.
-
-```sh
-python -m unittest discover -s tests -p 'test_*.py'
-```
-
-## Walker-delta constellations
-
-STL reading and seeded surface sampling are available from `barrel_assets.mesh`.
-`barrel_sensors.mesh_lidar` provides `LidarMesh`, angular ray scans, occlusion,
-full-surround scans, and return noise. Install the `lidar` extra for mesh ray tracing.
-These routines preserve the template-matching journal's geometry and sampling.
-
-`WalkerDeltaConstellation` owns a shell definition and produces classical elements,
-circular two-body ephemerides, or Basilisk ephemerides with local caching. Ring-link
-geometry is calculated from propagated positions. These operations are shared by
-applications instead of being implemented in the storm project.
-
-```python
-from barrel_mission import WalkerDeltaConstellation
-
-shell = WalkerDeltaConstellation(n_planes=8, sats_per_plane=12, alt_km=550, inc_deg=53)
-elements = shell.elements()
-ephemeris = shell.propagate(minutes=720, dt_s=1, dynamics_dt_s=10,
-                            workers=4, cache_root="cache/sim")
-links = shell.ring_geometry(ephemeris["pos"])
-```
-
-`circular(minutes=..., dt_s=...)` provides the inexpensive circular approximation;
-`propagate(...)` uses the same Mission force model and recorded precision as the
-journal experiments. Neither operation downloads external data.
-
-`dynamics_dt_s=10` computes the orbit at ten-second intervals, interpolates ECI
-position and velocity using cubic Hermite polynomials, and feeds those states into
-a separate one-second Basilisk attitude simulation with the existing reaction
-wheels, navigation, guidance, and feedback controller. `dt_s=1` still returns
-one-second samples. The separate passes assume the current constant drag area
-and balanced-wheel model; attitude-dependent forces would require coupled dynamics.
-The default is `dynamics_dt_s=10`; explicitly select `dynamics_dt_s=1` for the
-original coupled propagation.
-
-Cache names distinguish dynamics steps and interpolation modes; worker count does
-not change the cache. Constellation propagation reads native records without
-exporting intermediate CSVs. Normal `Mission.close()` still exports its CSVs.
-Attitude control still runs every second, so a ten-second orbit step does not imply
-a tenfold overall speedup. The constellation ephemeris currently exposes positions;
-applications that use `Environment.add_satellite` without quaternions retain its
-ideal nadir attitude model.
+Only five selected, checksum-pinned NASA models are downloaded and converted.
+`--models landsat9 hubble` selects a subset. Source transforms and physical scale
+are preserved. Set `BARREL_ASSET_DIR` to resolve generated mesh aliases elsewhere.
+No meshes, textures, simulation results, or compiled journals belong in Git.

@@ -2,8 +2,8 @@ import unittest
 
 import numpy as np
 
-from barrel_environment import (
-    DetectionEmission, GroundStation, Satellite, SatelliteFusionRing, Scene,
+from barrel_simulation import (
+    DetectionEmission, GroundStation, Satellite, SatelliteFusionRing, Simulation,
     SatelliteSurfaceEmitter,
 )
 from barrel_sensors import Estimator, EstimatorNode, LidarSensor, MeasurementBatch, Sensor, SensorChannel
@@ -70,18 +70,19 @@ class RuntimeTests(unittest.TestCase):
         nodes = [type("Node", (), {"sat_id": k, "estimate": k+1})() for k in range(3)]
         ring = SatelliteFusionRing(0, nodes, lambda a, b: a+b,
                                    estimate_getter=lambda sat: sat.estimate)
-        runtime = Scene(); runtime.add_fusion_ring(ring); runtime.add_ground_station(ground)
-        product = runtime.route_ring(ring, start_node=0, ground_station=ground, time_s=5.0)
+        runtime = Simulation()
+        runtime.schedule("downlink", [5.0], lambda sim: ground.receive(ring.fuse(0, sim.time_s)))
+        runtime.run([5.0])
+        product = ground._pending[0]
         self.assertEqual(product.estimate, 6)
         self.assertEqual(ground.update(5.0, 1.0), (6,))
 
     def test_epoch_emission_is_shared_by_sensors(self):
-        scene, emitter = Scene(seed=1), CountingEmitter()
-        scene.add_detectable(emitter)
-        a, b = Satellite(0), Satellite(1)
+        scene, emitter = Simulation(seed=1), CountingEmitter()
+        scene.add_source(emitter)
+        a, b = scene.add_satellite(), scene.add_satellite()
         a.add_payload(SensorChannel(PointSensor("a")))
         b.add_payload(SensorChannel(PointSensor("b")))
-        scene.add_satellite(a); scene.add_satellite(b)
         scene.step_to(1.0)
         self.assertEqual(emitter.calls, 1)
         self.assertEqual(a.payloads[0].sensor.latest.data, b.payloads[0].sensor.latest.data)
@@ -92,20 +93,22 @@ class RuntimeTests(unittest.TestCase):
         channel = SensorChannel(PointSensor("sensor"), [
             EstimatorNode("pose", raw), EstimatorNode("intent", downstream, source="pose")
         ])
-        scene, emitter, sat = Scene(seed=1), CountingEmitter(), Satellite(0)
-        scene.add_detectable(emitter); sat.add_payload(channel); scene.add_satellite(sat)
+        scene, emitter = Simulation(seed=1), CountingEmitter()
+        sat = scene.add_satellite()
+        scene.add_source(emitter); sat.add_payload(channel)
         scene.step_to(1.0)
         self.assertEqual(downstream.estimate(), 11)
 
     def test_lidar_returns_front_surface_cloud(self):
-        scene, sat = Scene(seed=1), Satellite(0)
+        scene = Simulation(seed=1)
+        sat = scene.add_satellite()
         sat.position_eci = np.zeros(3)
         sat.add_payload(SensorChannel(LidarSensor(max_range_m=100.0, fov_deg=30.0,
                                                   range_sigma_m=0.0, cross_range_sigma_m=0.0)))
         surface = np.array([[-0.1, 0.0, 0.0], [0.1, 0.0, 0.0], [0.0, 0.1, 0.0]])
         state = {"position": np.array([0.0, 0.0, 10.0]), "rotation": np.eye(3)}
-        scene.add_detectable(SatelliteSurfaceEmitter(1, state, surface))
-        scene.add_satellite(sat); scene.step_to(1.0)
+        scene.add_source(SatelliteSurfaceEmitter(1, state, surface))
+        scene.step_to(1.0)
         self.assertGreater(sat.payloads[0].sensor.latest.data.shape[1], 0)
 
 

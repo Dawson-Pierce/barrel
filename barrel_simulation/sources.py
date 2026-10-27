@@ -1,49 +1,58 @@
-"""Physical quantities observed by BARREL sensors."""
+"""Objects that emit physical phenomena detectable by BARREL sensors."""
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Callable
 
 import numpy as np
 
 
-class ObservedQuantity:
-    """Base interface for quantities that live in a BARREL environment."""
+@dataclass(frozen=True)
+class DetectionEmission:
+    source_id: object
+    kind: str
+    frame: str
+    data: object
+    metadata: dict = field(default_factory=dict)
 
-    name: str
 
-    def truth_frame(self, epoch_min):
-        raise NotImplementedError
+class ObservedQuantityEmitter:
+    """Expose an existing storm/latent observed quantity as optical emissions."""
 
-    def sample(self, epoch_min, rng, dt_s=1.0):
-        raise NotImplementedError
+    def __init__(self, quantity, rng=None, sample_dt_s=1.0, kind="optical_point"):
+        self.quantity = quantity
+        self.rng = rng or np.random.default_rng()
+        self.sample_dt_s = float(sample_dt_s)
+        self.kind = kind
 
-    def render(self, scene, epoch_min=0.0):
-        return []
+    def emit(self, time_s):
+        points = self.quantity.sample(float(time_s) / 60.0, self.rng, dt_s=self.sample_dt_s)
+        return DetectionEmission(self.quantity.name, self.kind, "geodetic_lonlat", points)
+
+
+class SatelliteSurfaceEmitter:
+    """A spacecraft surface available to active ranging sensors."""
+
+    def __init__(self, source_id, state, surface_points, metadata=None):
+        self.source_id = source_id
+        self.state = state
+        self.surface_points = np.asarray(surface_points, dtype=float)
+        self.metadata = dict(metadata or {})
+
+    def emit(self, time_s):
+        state = self.state(float(time_s)) if callable(self.state) else self.state
+        return DetectionEmission(
+            self.source_id,
+            "reflective_surface",
+            "eci",
+            self.surface_points,
+            {**self.metadata, "state": state},
+        )
+
 
 
 @dataclass
-class CallableObservedQuantity(ObservedQuantity):
-    """Adapt existing truth and sampling functions to an observed quantity."""
-
-    name: str
-    truth_fn: Callable
-    sample_fn: Callable
-    render_fn: Callable | None = None
-
-    def truth_frame(self, epoch_min):
-        return self.truth_fn(epoch_min)
-
-    def sample(self, epoch_min, rng, dt_s=1.0):
-        return self.sample_fn(epoch_min, rng, dt_s)
-
-    def render(self, scene, epoch_min=0.0):
-        return [] if self.render_fn is None else self.render_fn(scene, epoch_min)
-
-
-@dataclass
-class GeodeticEllipseSet(ObservedQuantity):
+class GeodeticEllipseSet:
     """Moving geodetic ellipse point process.
 
     Storm dictionaries use longitude and latitude in degrees, optional motion
@@ -57,9 +66,6 @@ class GeodeticEllipseSet(ObservedQuantity):
     lon_start: float | None = None
     lon_rate: float = 0.0
     lat_clip: tuple[float, float] = (-89.0, 89.0)
-    render_color: tuple[float, float, float] = (1.0, 0.9, 0.25)
-    render_width: float = 0.008
-    render_sigma: float = 2.0
     _last_samples: np.ndarray = field(default_factory=lambda: np.zeros((2, 0)), init=False)
 
     @staticmethod
@@ -162,30 +168,3 @@ class GeodeticEllipseSet(ObservedQuantity):
         self._last_samples = np.vstack(points).T if points else np.zeros((2, 0))
         return self._last_samples
 
-    def ellipse_lonlat(self, mean, extent, n=96):
-        values, vectors = np.linalg.eigh(np.asarray(extent, dtype=float))
-        theta = np.linspace(0.0, 2.0 * np.pi, int(n), endpoint=True)
-        axes = self.render_sigma * np.sqrt(np.maximum(values, 1e-9))
-        local = vectors @ np.vstack((axes[0] * np.cos(theta), axes[1] * np.sin(theta)))
-        lonlat = np.asarray(mean, dtype=float)[:, None] + local
-        lonlat[0] = (lonlat[0] + 180.0) % 360.0 - 180.0
-        lonlat[1] = np.clip(lonlat[1], *self.lat_clip)
-        return lonlat.T
-
-    @staticmethod
-    def _as_scene_geodetic(lonlat):
-        return [(float(row[1]), float(row[0]), 0.0) for row in np.asarray(lonlat)]
-
-    def render(self, scene, epoch_min=0.0):
-        objects = [
-            scene.add_line(
-                self._as_scene_geodetic(self.ellipse_lonlat(mean, extent)),
-                frame="geodetic", color=self.render_color,
-                width=self.render_width, strength=3.5)
-            for mean, extent, _ in self.truth_frame(epoch_min)
-        ]
-        if self._last_samples.shape[1]:
-            objects.append(scene.add_lightning(
-                self._as_scene_geodetic(self._last_samples.T),
-                frame="geodetic", size=0.025))
-        return objects

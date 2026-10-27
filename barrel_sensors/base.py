@@ -21,18 +21,23 @@ class MeasurementBatch:
 class Sensor:
     """Base class for a stateful, scheduled physical sensor model."""
 
-    def __init__(self, name=None, cadence_s=0.0):
+    def __init__(self, name=None, cadence_s=0.0, *, sample=None, frame=""):
         self.name = name or type(self).__name__
         self.cadence_s = float(cadence_s)
         self.measurements: list[MeasurementBatch] = []
         self._last_acquisition_s = None
+        self._sample = sample
+        self.frame = frame
 
     def is_due(self, time_s):
         return (self._last_acquisition_s is None or self.cadence_s <= 0.0
                 or float(time_s) + 1e-12 >= self._last_acquisition_s + self.cadence_s)
 
     def acquire(self, scene, host, time_s, rng):
-        raise NotImplementedError
+        if self._sample is None:
+            raise NotImplementedError
+        return self.record(MeasurementBatch(
+            self.name, time_s, self._sample(scene, host, time_s, rng), self.frame))
 
     def record(self, batch):
         self._last_acquisition_s = float(batch.time_s)
@@ -45,10 +50,11 @@ class Sensor:
 
     def clear(self):
         self.measurements.clear()
+        self._last_acquisition_s = None
 
 
 class Estimator:
-    """Small common interface implemented by Pierced/BREW estimator adapters."""
+    """Common interface for application/BREW estimator adapters."""
 
     def predict(self, time_s, dt_s, host=None):
         raise NotImplementedError
@@ -83,6 +89,7 @@ class SensorChannel:
     def __init__(self, sensor: Sensor, estimators: Iterable[EstimatorNode] = ()):
         self.sensor = sensor
         self.estimators = []
+        self.outputs = {}
         for node in estimators:
             self.add_estimator(node)
 
@@ -97,14 +104,17 @@ class SensorChannel:
     def acquire_and_update(self, scene, host, time_s, dt_s, rng):
         if not self.sensor.is_due(time_s):
             return None
+        elapsed = (float(time_s) - self.sensor._last_acquisition_s
+                   if self.sensor._last_acquisition_s is not None else 0.0)
         batch = self.sensor.acquire(scene, host, time_s, rng)
         outputs = {}
         for node in self.estimators:
             if not node.enabled:
                 continue
-            node.estimator.predict(time_s, dt_s, host=host)
+            node.estimator.predict(time_s, elapsed, host=host)
             value = batch if node.source == "sensor" else outputs[node.source]
             node.estimator.correct(value, time_s, host=host)
             outputs[node.name] = node.estimator.estimate()
+        self.outputs = outputs
         return batch, outputs
 

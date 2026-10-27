@@ -1,26 +1,4 @@
-"""The Mission class: own a constellation, propagate it with the Basilisk astrodynamics
-framework at full barrelsim fidelity, log CSVs, and render -- all into a run-scoped folder.
-
-Basilisk owns the dynamics (the old barrelsim C++ core is retired) but the modelled physics
-match what barrelsim did:
-
-  * geopotential -- spherical harmonics (GGM03S) to degree/order `gravity_degree`,
-  * drag         -- exponential atmosphere (Vallado layer at the orbit altitude) + cannonball,
-  * third body   -- Sun and Moon point-mass perturbations from analytic ephemerides,
-  * attitude     -- three reaction wheels per satellite slaved to an MRP feedback controller
-                    tracking a guidance reference (nadir / sun / target / inertial hold).
-
-The renderer (barrel_render) is untouched: the Mission writes the same trajectory.csv contract
-(sat_id, t_s, jd_utc, x_m, y_m, z_m, qx..qw, ECI metres, body->inertial quaternion). The logged
-quaternion is the satellite's *controlled* attitude, in the renderer's body convention
-(body +Z = zenith, so a camera's -Z boresight images whatever the pointing mode targets).
-
-Propagation is incremental: run() advances every satellite by `duration` from its current
-state, so commands (pointing, impulsive delta-v) can be issued between run() calls. The dynamics
-integrate (and the controllers run) at a fixed fine step `control_dt`; run()'s `dt` is only the
-logging cadence.
-"""
-
+"""Internal Basilisk propagation and state recording; configured through Simulation."""
 import csv
 import math
 import os
@@ -35,7 +13,7 @@ from Basilisk.utilities import RigidBodyKinematics as rbk
 from Basilisk.utilities import (SimulationBaseClass, macros, orbitalMotion, simIncludeGravBody,
                                  simIncludeRW)
 
-from barrel_render import data as bdata          # bpy-free astronomy/CSV helpers
+from . import coordinates as bdata
 
 # Earth constants (match Basilisk's gravBodyFactory.createEarth()).
 MU_EARTH = 0.39860043550702266e15               # m^3/s^2
@@ -204,14 +182,12 @@ class _Guidance(sysModel.SysModel):
         self.attRefOutMsg.write(pl, t, self.moduleID)
 
 
-class Mission:
-    """A constellation + its commands + Basilisk propagation + rendering, with its own
-    timestamped output folder."""
+class _BasiliskDynamics:
+    """Basilisk spacecraft, force models, controllers, and native recorders."""
 
     def __init__(self, name=None, output_root="output", epoch=(2026, 1, 1, 0, 0, 0),
-                 earth_res="8k", forces=("j2", "drag", "sun", "moon"), gravity_degree=32,
+                 forces=("j2", "drag", "sun", "moon"), gravity_degree=32,
                  gravity_file=None, control_dt=1.0):
-        self.earth_res = earth_res
         self.epoch = tuple(epoch)
         self.jd0 = _jd_from_calendar(*epoch)
         self._forces = set(forces)
@@ -234,7 +210,7 @@ class Mission:
         self._translation = None
         self.frames_logged = 0
         import Basilisk
-        print(f"[mission] run dir: {self.run_dir}  (Basilisk {Basilisk.__version__})")
+        print(f"[dynamics] run dir: {self.run_dir}  (Basilisk {Basilisk.__version__})")
 
     # ---- setup -------------------------------------------------------------
     def prescribe_translation(self, times, positions, velocities):
@@ -257,15 +233,13 @@ class Mission:
         self._translation = _TranslationReference(times, positions, velocities)
 
     def add_satellite(self, elements=None, state=None, name=None, pointing="nadir",
-                      cameras=(("overview",),), mass=100.0, drag_area=1.0, drag_cd=2.2,
-                      inertia=(10.0, 10.0, 10.0), wheels=True, **_ignored):
+                      mass=100.0, drag_area=1.0, drag_cd=2.2,
+                      inertia=(10.0, 10.0, 10.0), wheels=True):
         """Add a satellite from classical elements (a,e,i,raan,argp,nu; SI/rad) or a raw
-        (r, v) ECI state. `cameras` is a list of specs, e.g.
-        [("overview",), ("sensor", fov_deg, off_nadir_deg)]. `inertia` is the body principal
+        (r, v) ECI state. `inertia` is the body principal
         moments (kg m^2); `wheels` enables the three-wheel attitude controller."""
         name = name or f"sat{len(self._specs)}"
-        self._specs.append(dict(name=name, cameras=[tuple(c) for c in cameras],
-                                pointing=pointing, elements=elements, state=state,
+        self._specs.append(dict(name=name, pointing=pointing, elements=elements, state=state,
                                 mass=float(mass), drag_area=float(drag_area), drag_cd=float(drag_cd),
                                 inertia=tuple(float(x) for x in inertia), wheels=bool(wheels)))
         return len(self._specs) - 1
@@ -298,10 +272,10 @@ class Mission:
             shm.cBar = cBar
             shm.sBar = sBar
             earth.gravityModel = shm
-            print(f"[mission] gravity: {os.path.basename(self._gravity_file)} "
+            print(f"[dynamics] gravity: {os.path.basename(self._gravity_file)} "
                   f"spherical harmonics deg/order {deg}")
         else:
-            print("[mission] gravity: point mass")
+            print("[dynamics] gravity: point mass")
         return gf
 
     def _build_third_bodies(self, gf):
@@ -317,7 +291,7 @@ class Mission:
             body.planetBodyInMsg.subscribeTo(msg)
             self._third.append((body, msg, ephem))
         if wanted:
-            print(f"[mission] third body: {', '.join(w[0] for w in wanted)}")
+            print(f"[dynamics] third body: {', '.join(w[0] for w in wanted)}")
 
     def _refresh_third_bodies(self):
         """Write the current Sun/Moon positions into their ephemeris messages."""
@@ -346,7 +320,7 @@ class Mission:
         atmo.planetRadius = R_EARTH
         atmo.scaleHeight = H * 1000.0
         atmo.baseDensity = rho0 * math.exp((h0 * 1000.0) / (H * 1000.0))   # rho(h0)=rho0
-        print(f"[mission] drag: exponential atmosphere anchored at {h0} km "
+        print(f"[dynamics] drag: exponential atmosphere anchored at {h0} km "
               f"(rho={rho0:.3e}, H={H} km)")
         return atmo
 
@@ -402,7 +376,7 @@ class Mission:
         rwEff.rwMotorCmdInMsg.subscribeTo(rwMot.rwMotorTorqueOutMsg)
 
         # Every object here is referenced by the running C++ task, so the dict (stored on the
-        # Mission in _build) must outlive the sim: a GC'd RW-config message or FSW module leaves
+        # dynamics owner in _build) must outlive the sim: a GC'd RW-config message or FSW module leaves
         # the task reading freed memory -> singular matrices / garbage torques.
         return dict(rwEff=rwEff, rwFactory=rwFactory, rwParamMsg=rwParamMsg, nav=nav, guid=guid,
                     attErr=attErr, vehCfgMsg=vehCfgMsg, fb=fb, rwMot=rwMot,
@@ -533,7 +507,7 @@ class Mission:
             vState.setState(v.reshape(3, 1).tolist())
 
     # ---- propagation -------------------------------------------------------
-    def run(self, duration, dt=30.0, integ_step=None):
+    def run(self, duration, dt=30.0):
         """Advance every satellite by `duration` from its current state, logging every `dt`
         seconds (the dynamics + controllers always integrate at the fine `control_dt` step).
         Repeated calls continue the propagation."""
@@ -544,11 +518,8 @@ class Mission:
         self._scSim.ConfigureStopTime(macros.sec2nano(self._elapsed))
         self._scSim.ExecuteSimulation()
 
-    def step(self, dt, integ_step=None):
-        self.run(dt, dt)
-
     def state(self, sat):
-        """Current live truth state for the event-driven BARREL scene."""
+        """Current physical state of a Basilisk spacecraft."""
         if not self._built:
             raise RuntimeError("mission has not been advanced; call step() first")
         i = self._resolve(sat)
@@ -567,8 +538,7 @@ class Mission:
 
     # ---- logging -----------------------------------------------------------
     def _quat_bodytoinertial(self, sigma_BN):
-        """Controlled MRP attitude -> body->inertial quaternion (x,y,z,w) in the renderer's
-        convention (reuse the renderer's DCM->quat so cameras stay consistent)."""
+        """Controlled MRP attitude to a body-to-inertial xyzw quaternion."""
         BN = rbk.MRP2C(np.asarray(sigma_BN, float))        # inertial -> body; rows = body axes in N
         return bdata._dcm_to_quat(tuple(BN[0]), tuple(BN[1]), tuple(BN[2]))
 
@@ -607,21 +577,7 @@ class Mission:
         tf.close()
         af.close()
 
-    # ---- rendering ---------------------------------------------------------
-    def render(self, cadence="all", cameras="per_sat", **kw):
-        from . import render as _render
-        self.flush()
-        return _render.render_run(self, cadence=cadence, cameras=cameras, **kw)
-
     # ---- lifecycle ---------------------------------------------------------
-    def flush(self):
-        self._write()
-
     def close(self):
         self._write()
 
-    def __enter__(self):
-        return self
-
-    def __exit__(self, *exc):
-        self.close()

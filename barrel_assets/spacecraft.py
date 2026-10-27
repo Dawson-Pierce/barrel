@@ -8,9 +8,6 @@ import os
 ASSET_DIR = Path(os.environ.get("BARREL_ASSET_DIR", "output/meshes")).resolve()
 
 _ALIASES = {
-    "cubesat": "cubesat_mid.stl",
-    "cubesat_mid": "cubesat_mid.stl",
-    "cygnss": "cygnss.stl",
     "landsat": "landsat9_assembled.stl",
     "landsat9": "landsat9_assembled.stl",
     "hubble": "hubble.stl",
@@ -21,7 +18,7 @@ _ALIASES = {
 
 
 def available_assets():
-    """Return the names that can be passed to ``EarthScene.add_satellites(asset=...)``."""
+    """Return the available spacecraft mesh aliases."""
     return sorted(_ALIASES)
 
 

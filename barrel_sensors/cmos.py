@@ -9,7 +9,7 @@ camera frame (x=east, y=north, z=zenith; boresight = -z) is built there. Pure Nu
 
 import numpy as np
 
-from barrel_render import data as bdata
+from barrel_simulation import coordinates as bdata
 from .base import MeasurementBatch, Sensor
 
 _A = 6378137.0
@@ -63,7 +63,7 @@ class CmosSensor(Sensor):
         emissions = scene.emissions("optical_point")
         points = [np.asarray(item.data, dtype=float) for item in emissions if np.asarray(item.data).size]
         truth = np.hstack(points) if points else np.zeros((2, 0))
-        measured = self.observe(host.position_eci, host.jd, truth, rng)
+        measured = self.observe(host.position_eci, host.epoch_jd, truth, rng)
         return self.record(MeasurementBatch(
             self.name, time_s, measured, "geodetic_lonlat",
             tuple(item.source_id for item in emissions), {"truth_count": int(truth.shape[1])},

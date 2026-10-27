@@ -8,6 +8,5 @@ output
 cache
 .venv
 .pytest_cache
-Texture_Files
 **/*.stl
 **/*.glb

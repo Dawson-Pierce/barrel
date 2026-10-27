@@ -5,12 +5,12 @@ from unittest.mock import patch
 import numpy as np
 from Basilisk.architecture import messaging
 
-from barrel_mission import Mission
-from barrel_mission import mission as mission_module
-from barrel_mission.constellation import interpolated_states, walker_elements
+from barrel_simulation._dynamics import _BasiliskDynamics
+from barrel_simulation import _dynamics as mission_module
+from barrel_simulation.constellation import interpolated_states, walker_elements
 
 
-class MissionInitializationTests(unittest.TestCase):
+class DynamicsInitializationTests(unittest.TestCase):
     def test_drag_density_is_read_before_initial_force_evaluation(self):
         factory = mission_module.dragDynamicEffector.DragDynamicEffector
 
@@ -29,7 +29,7 @@ class MissionInitializationTests(unittest.TestCase):
             with self.subTest(wheels=wheels), tempfile.TemporaryDirectory() as output:
                 with patch.object(mission_module.dragDynamicEffector,
                                   "DragDynamicEffector", side_effect=stale_drag):
-                    mission = Mission(output_root=output, control_dt=step)
+                    mission = _BasiliskDynamics(output_root=output, control_dt=step)
                     for element in walker_elements(2, 2):
                         mission.add_satellite(elements=element, wheels=wheels)
                     mission.run(duration=20.0, dt=step)
